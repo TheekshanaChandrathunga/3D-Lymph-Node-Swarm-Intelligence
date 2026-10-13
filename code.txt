@@ -1,0 +1,185 @@
+;; =========================================================================
+;; PROJECT 1: 3D 2-ANTIGEN SYSTEM WITH CHEMOTACTIC SEARCH (NETLOGO 3D)
+;; Based on Sections 2.2, 2.3.1, & 2.3.3 of Tutorial Document
+;; =========================================================================
+
+breed [ tcells tcell ]
+breed [ dcs dc ]
+
+tcells-own [
+  met-dc1?       ; True if T-cell has encountered DC 1 (Antigen A)
+  met-dc2?       ; True if T-cell has encountered DC 2 (Antigen B)
+  tDCfree        ; Time remaining bound to a DC
+]
+
+dcs-own [
+  antigen-type   ; 1 for Antigen A (Red), 2 for Antigen B (Blue)
+]
+
+patches-own [
+  chemokine      ; Chemical signal diffused across 3D patches
+]
+
+links-own [
+  t-link-free    ; Link contact timer
+]
+
+globals [
+  dt             ; Duration of time step in minutes (0.5 min)
+  ds             ; Patch spatial scale (8 um/patch)
+  tcell-step     ; Movement step size in patches/step
+  nDCmeet        ; Total cumulative DC-T cell encounters
+]
+
+to setup
+  clear-all
+
+  ;; Physical parameters mapping
+  set dt 0.5
+  set ds 8
+  set tcell-step (16 / ds) * dt   ; 16 um/min converted to patches/tick
+  set nDCmeet 0
+
+  ask patches [
+    set pcolor black
+    set chemokine 0
+  ]
+
+  ;; Create 2 DCs with distinct antigens and colors
+  set-default-shape dcs "circle"
+  create-dcs 1 [
+    set antigen-type 1
+    set color red
+    set size 2.5
+    setxyz -8 -8 0
+  ]
+  create-dcs 1 [
+    set antigen-type 2
+    set color blue
+    set size 2.5
+    setxyz 8 8 0
+  ]
+
+  ;; Create T-cells initialized to naive green state
+  set-default-shape tcells "circle"
+  create-tcells tcell-count [
+    set size 1.0
+    set color green
+    set met-dc1? false
+    set met-dc2? false
+    set tDCfree 0
+    setxyz random-xcor random-ycor random-zcor
+  ]
+
+  do-plots
+  reset-ticks
+end
+
+to go
+  ;; Stop automatically when all T-cells have encountered at least one antigen
+  if all? tcells [ met-dc1? or met-dc2? ] [
+    print (word "All T-cells primed with antigens at " ticks " minutes.")
+    stop
+  ]
+
+  diffuse-chemokine
+  emit-chemokine
+  move-tcells
+  check-dc-encounters
+  update-links
+  do-plots
+  tick-advance dt
+end
+
+to diffuse-chemokine
+  diffuse chemokine 0.25
+  ask patches [
+    set chemokine chemokine * 0.95
+  ]
+end
+
+to emit-chemokine
+  ask dcs [
+    ask patch-here [
+      set chemokine chemokine + 6.0
+    ]
+  ]
+end
+
+to move-tcells
+  ask tcells [
+    ;; Only free cells move
+    if tDCfree <= 0 [
+      let strongest-neighbor max-one-of neighbors [ chemokine ]
+
+      ;; Chemotaxis gradient ascent vs random walk
+      ifelse (random-float 1.0 < chemotaxis-bias) and ([chemokine] of strongest-neighbor > 0.05) [
+        face strongest-neighbor
+        right random-normal 0 15
+        roll-right random-normal 0 15
+      ] [
+        right random-normal 0 90
+        roll-right random-normal 0 90
+      ]
+      forward tcell-step
+    ]
+  ]
+end
+
+to check-dc-encounters
+  ask dcs [
+    let my-type antigen-type
+    ;; Detect unbound T-cells within 2 patches (19 um contact radius)
+    let nearby-tcells tcells with [ tDCfree <= 0 ] in-radius 2
+
+    ask nearby-tcells [
+      set tDCfree 3.0   ; Pause for 3 minutes upon encounter
+      set nDCmeet nDCmeet + 1
+
+      if my-type = 1 [ set met-dc1? true ]
+      if my-type = 2 [ set met-dc2? true ]
+
+      ;; Color updating rule based on antigen history
+      ifelse (met-dc1? and met-dc2?) [
+        set color cyan   ; Cross-reactive / dual primed
+      ] [
+        ifelse met-dc1? [
+          set color red
+        ] [
+          set color blue
+        ]
+      ]
+
+      create-link-with myself [
+        set color [ color ] of myself
+        set t-link-free 3.0
+      ]
+    ]
+  ]
+end
+
+to update-links
+  ask links [
+    set t-link-free t-link-free - dt
+    if t-link-free <= 0 [
+      die
+    ]
+  ]
+
+  ask tcells with [ tDCfree > 0 ] [
+    set tDCfree tDCfree - dt
+  ]
+end
+to do-plots
+  set-current-plot "Antigen Recognition Dynamics"
+  set-current-plot-pen "Met DC1"
+  plot count tcells with [ met-dc1? and not met-dc2? ]
+  set-current-plot-pen "Met DC2"
+  plot count tcells with [ met-dc2? and not met-dc1? ]
+  set-current-plot-pen "Met Both"
+  plot count tcells with [ met-dc1? and met-dc2? ]
+
+  set-current-plot "Total Encounters"
+  set-current-plot-pen "Total Synapses"
+  plot nDCmeet
+end
